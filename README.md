@@ -21,9 +21,14 @@ Recoil과 RQ는 집중하는 분야가 다르구나 싶은 생각이 들었었�
 
 - Recoil은 동기와 비동기 함수들을 selector의 데이터 플로우 그래프에서 균일하게 혼합해준다.
 - Selecter Get 콜백에서 나온 값 그 자체 대신 프로미스를 리턴해도 인터페이스는 정확하게 그대로 유지된다.
-  - 심지어 atom default 값에다가 promise를 설정해도(이때는 함수는 하니고 값) 비동기 처리가 된다.
+  - atom이나 selector은 promise 값을 처리하는데 무리가 없다. 심지어 atom에다가 promise를 써도 된다.
+  ```tsx
+  
+  ```
 - 이들은 selector일 뿐이므로 다른 selector에 의존하여 데이터를 추가로 변환할 수 있다(컨디셔널 쿼리)
 - Selector는 idempotent 함수로, 주어진 인풋들로 **항상 같은 결과**를 만들어낸다(캐싱)
+
+
 
 ## GET Cache
 
@@ -96,6 +101,8 @@ function CompD() {
 
 export default CompD
 ```
+
+
 
 ## Conditional GET Query
 
@@ -243,9 +250,11 @@ export default CompA
 의존성이 없는 비동기 쿼리는 refetch가 필요하면 refresher을 사용하고,
 있는 경우에는 의존성을 사용해 업뎃하거나, 이미 의존성이 fix된 상태에서 리패치만 필요한 경우라면 refresher을 사용할 수 있겠다.
 
-근데 나같으면 refresh만 쓸거같다는 느낌이 든다..
+근데 나같으면 refresh만 쓸거같다는 느낌이 강하게 든다
 
 ## POST, PUT 요청의 애매함
+
+body값 어캐넣음?
 
 ## 느낀점
 
