@@ -1,6 +1,7 @@
 # Recoil ASYNC POC
 
-Recoil만을 이용한 비동기 처리 실험을 몇개 해봅니다
+개인 프로젝트 하면서 만든 API들로  
+Recoil만을 이용한 비동기 처리 실험을 몇 개 해봅니다
 
 ## 왜 하는가?
 
@@ -12,6 +13,7 @@ Recoil과 RQ는 집중하는 분야가 다르구나 싶은 생각이 들었었�
 
 그래서 고민하다가 RQ를 썼는데,
 사실 Recoil만을 사용해서 비동기 처리도 가능하기 때문에 관련해서 비교를 좀 해보고 싶었음.
+
 여러 유스케이스에 대응해보면서,
 비동기 처리 중 혹시 RQ를 쓰기에 적합한 곳과, Recoil을 쓰기에 적합한 곳이 또 따로 있을지도 알아보고 싶었음.
 
@@ -25,9 +27,9 @@ Recoil과 RQ는 집중하는 분야가 다르구나 싶은 생각이 들었었�
 
 ## GET Cache
 
-## Conditional Query
 
-## 컴포넌트 2곳에서 동시에 비동기 쿼리 Mount
+
+## 컴포넌트 2곳에서 동시에 GET 비동기 쿼리 Mount
 
 param없는, 이렇게 생긴 셀렉터 값을 받아서 2개의 컴포넌트를 동시에 렌더링했는데  
 network 요청은 한번만 발생했다. 의존성이 없는 것도 하나의 의존성 유형으로 치는가부다.
@@ -48,10 +50,54 @@ export const notificationsQuery = selector<Notification[]>({
 })
 ```
 
-## param(id같은거)을 atom으로 저장할 수 있는 경우와 아닌 경우
+## param에 의존하는 GET 비동기 요청의 경우
 
 param이 없는 get 요청의 경우 아주 단순하게 위처럼 selector을 만들어 패칭해올 수 있다.  
-그런데 param값에 따라 비동기 요청을 각자 따로 보내야 한다면?
+
+그런데 param값에 따라 비동기 요청을 각자 따로 보내야 한다면? selectorFamily를 사용해 동적으로 여러 셀렉터를 만들어  
+각기 다른 비동기 요청이 일어나게끔 만들 수 있다. selector는 selectorFamily의 인자값을 통해서도 캐싱을 한다.
+
+selectorFamily와 atomFamily는 이름 그대로 atom과 selector들의 집합이다. 동적으로 여러개의 셀렉터, 혹은 아톰을 만드는 방법이다.
+원래는 Key로만 selector, atom을 구분하겠지만 family를 사용하는 경우 recoilValue를 사용할때 해당 selector 혹은 atom에 인자를 넣어줄 수 있고,
+selector는 이 인자에 의존하게 된다.
+
+```tsx
+export const tweetQuery = selectorFamily<Tweet, string>({
+  key: 'tweet',
+  get: tweetId => async () => {
+    const { data } = await getTweetById(tweetId);
+    return data.tweet;
+  }
+})
+
+const tweetIds = [
+    '2058832-1',
+    '2058901-1',
+    '2058957-1',
+    '2059119-1',
+    '2059604-1',
+    '2059776-1',
+    '2060160-1',
+]
+
+const randomIndex = Math.floor(Math.random() * tweetIds.length);
+
+function CompD() {
+    const tweet = useRecoilValue(tweetQuery(tweetIds[randomIndex]));
+
+    return (
+        <>
+            <h1>컴포넌트 D</h1>
+            <div>{tweet.name}</div>
+            <div>{tweet.id}</div>
+        </>
+    )
+}
+
+export default CompD
+```
+
+## Conditional GET Query
 
 
 ## Suspense
@@ -66,7 +112,7 @@ Selector의 의존성을 이용해 값을 캐싱하기 때문에 사실상 리�
 RQ는 쿼리 자체를 Invalidation해서 캐시를 폐기하는 방법,
 useQuery의 리턴값 중 하나인 refetch를 이용해 값을 직접 imperative하게 데이터를 리패치 시도하는 방법 2가지의 방법이 있다. 
 
-Invalidation과 refetch의 차이는, Invalidation 시킬 경우 쿼리 자체가 강제로 stale 상태로 바뀌고
+RQ에서의 Invalidation과 refetch의 차이는, Invalidation 시킬 경우 쿼리 자체가 강제로 stale 상태로 바뀌고
 inactive 상태가 아닌 쿼리의 경우 리패치가 일어난다. 이때 cacheTime이나 stateTime을 얼마나 걸어놨는지는 상관이 없다.
 
 refetch 시도의 경우는 현재 설정한 stale, cache 타임에 영향을 받는다
@@ -122,8 +168,10 @@ function CurrentUserInfo() {
   // 현재 atom에 미리 저장해두었던 사용자 id
   const currentUserID = useRecoilValue(currentUserIDState);
   
-  // 비동기 쿼리 참조
+  // id를 통해 비동기 쿼리 참조
   const currentUserInfo = useRecoilValue(userInfoQuery(currentUserID));
+  
+  // request 요청 리프레시를 트리거하는 아톰 값을 갱신하는 커스텀 훅
   const refreshUserInfo = useRefreshUserInfo(currentUserID);
 
   return (
@@ -193,15 +241,31 @@ export default CompA
 로드맵에 당연히 있었겠지만 나와서 다행인 API이다..  
 
 의존성이 없는 비동기 쿼리는 refetch가 필요하면 refresher을 사용하고,
-있는 경우에는 의존성을 사용해 업뎃하거나, 이미 의존성이 fix된 상태라면 refresher을 사용할 수 있겠다.
+있는 경우에는 의존성을 사용해 업뎃하거나, 이미 의존성이 fix된 상태에서 리패치만 필요한 경우라면 refresher을 사용할 수 있겠다.
 
-## POST?
+근데 나같으면 refresh만 쓸거같다는 느낌이 든다..
+
+## POST, PUT 요청의 애매함
 
 ## 느낀점
 
-### Recoil이 불편한 점
+### RQ가 Recoil보다 좋은 점
 
-### Recoil이 좋은 점
+- 좀더 복잡한 유스케이스의 비동기 처리에 강점
+  - staleTime, cacheTime
+  - 에러시 Retry, window refocus시 refetch
+  - refetchInterval
+- Mutation
+- 
+
+### Recoil이 RQ보다 좋은 점
+
+- suspense와의 궁합
+
+### 기타 등등
+
+- 앱의 복잡성 증대에는 어떤 영향을 끼칠까?
+- 비동기 쿼리 역시 Recoil Value를 기준으로 움직인다. 이런 면에서는 RTK Query 같기두 하고
 
 ### 결론
 

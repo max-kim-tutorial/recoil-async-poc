@@ -1,6 +1,6 @@
-import {selector} from "recoil";
-import {getNotifications} from "./service";
-import {Notification} from "./types";
+import {selector, selectorFamily} from "recoil";
+import {getNotifications, getTweetById} from "./service";
+import {Notification, Tweet} from "./types";
 
 // const notificationsQuery = atom({
 //     key: 'notifications',
@@ -12,5 +12,13 @@ export const notificationsQuery = selector<Notification[]>({
     get: async () => {
         const { data } = await getNotifications();
         return data.notifications;
+    }
+})
+
+export const tweetQuery = selectorFamily<Tweet, string>({
+    key: 'tweet',
+    get: tweetId => async () => {
+        const { data } = await getTweetById(tweetId);
+        return data.tweet;
     }
 })

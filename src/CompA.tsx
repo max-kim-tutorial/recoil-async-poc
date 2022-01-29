@@ -8,7 +8,7 @@ function CompA() {
 
     return (
         <>
-            <button onClick={() => {refresh()}}>쿼리 몽땅 리프레시 해볼건가~</button>
+            <button onClick={() => {refresh()}}>공지사항 쿼리 몽땅 리프레시</button>
             <h1>컴포넌트 A</h1>
             <div>{notifications[0].title}</div>
         </>
