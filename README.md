@@ -28,8 +28,6 @@ Recoil과 RQ는 집중하는 분야가 다르구나 싶은 생각이 들었었�
 - 이들은 selector일 뿐이므로 다른 selector에 의존하여 데이터를 추가로 변환할 수 있다(컨디셔널 쿼리)
 - Selector는 idempotent 함수로, 주어진 인풋들로 **항상 같은 결과**를 만들어낸다(캐싱)
 
-
-
 ## GET Cache
 
 
@@ -102,14 +100,247 @@ function CompD() {
 export default CompD
 ```
 
+## 조건부 GET Query
 
+자주는 아니지만, 특정 조건이 충족되었을 때만 GET을 해와야 하는 쿼리가 존재할 수 있다.
 
-## Conditional GET Query
+종강시계에서는 effect을 이용해 storage의 값을 앱의 시작과 동시에 자동으로 atom에 넣고,  
+그 atom의 값을 평가해서, 사용자가 설정한 배경화면이 있을 경우 배경화면을 이미지를 요청하지 않는 식의 로직이 있었다.
 
+이걸 RQ로 처리할때는, useQuery가 제공하는 옵션 중 enable과 동적 쿼리 key를 이용하면 되었었다. 최초의 배경화면을 불러오는
+쿼리와, 배경화면을 업데이트하는 쿼리로 나눠서 개발한다.
+
+```tsx
+const useBackgroundApplyQuery = () => {
+  const [{ status, value }, setBackgroundImage] =
+    useRecoilState(userBackgroundImage);
+
+  const { data: backgroundImgData } = useQuery<BackgroundImg>({
+    queryKey: [
+      'background',
+      `apply-${status}${value !== null ? `-${value?.name}` : ''}`,
+    ],
+    queryFn: async () => {
+      if (value !== null) return value;
+      const { data } = await getBackgroundImages('seoul');
+      const convertResult = {
+        ...data,
+        dayImageUrl: await convertImageToDataUrl(data.dayImageUrl),
+        nightImageUrl: await convertImageToDataUrl(data.nightImageUrl),
+      };
+      setBackgroundImage((state) => ({
+        ...state,
+        value: convertResult,
+      }));
+      return convertResult;
+    },
+    suspense: true,
+    enabled: status === 'initialized',
+  });
+
+  return backgroundImgData;
+};
+
+// campus 인자로 값을 트리거해서 쿼리를 마운트시킨다
+const useBackgroundUpdateQuery = (campus: Campus | null) => {
+  const setBackgroundImage = useSetRecoilState(userBackgroundImage);
+
+  const { isFetching, isError } = useQuery({
+    queryKey: ['background', `update-${campus}`],
+    queryFn: async () => {
+      const { data } = await getBackgroundImages(campus as Campus);
+
+      const convertResult = {
+        ...data,
+        dayImageUrl: await convertImageToDataUrl(data.dayImageUrl),
+        nightImageUrl: await convertImageToDataUrl(data.nightImageUrl),
+      };
+
+      setBackgroundImage((state) => ({
+        ...state,
+        value: convertResult,
+      }));
+      return convertResult;
+    },
+    cacheTime: 0,
+    enabled: campus !== null,
+  });
+
+  return {
+    isFetching,
+    isError,
+  };
+};
+```
+
+이렇게 하면 첫 렌더링에서 마운트된 쿼리는 바로 언마운트되기 때문에 inactive 상태가 되며, 
+recoil 값의 평가가 끝났을 때 새로운 query key를 사용해 recoil의 값을 가져오거나,
+배경화면을 바꾸는 곳에서 지역 state를 선언하고 이를 쿼리에 주입해 필요할때 새로운 이미지를 패칭해 Recoil value에 넣는다
+
+이렇게 RQ로 하기 좀 까다로웠던 경우가 RQ와 Recoil의 상태가 엮이는 경우였던 것 같다. 
+
+의미 없는 쿼리가 마운트되는게 마음에 안 들고, 쿼리 함수 안에서 recoil을 건드니
+더럽다는 생각도 들었다. Recoil로 해보면 어떨까 해서 Recoil로도 짜봤다.
+
+먼저, storage에서 값을 가져오는 아톰을 하나 둔다.
+
+```tsx
+const backgroundAtom = atom({
+  key: 'userBackgroundImgInfo',
+  default: {
+    status: 'idle',
+    value: null,
+  },
+  effects_UNSTABLE: [
+    chromeStorageEffect<BackgroundImg>('userBackgroundImgInfo'),
+  ],
+})
+```
+
+그리고 컴포넌트에서 참조할, 유저의 진짜 배경화면 정보를 가지고 있는 selector가 필요하다. 이 selector는 atom.value가 
+있는 경우 atom.value를 그대로 가져오고, null일 경우 서울캠퍼스 배경화면을 패치해서 가져와 가공해서 제공한다.
+
+```tsx
+const userBackgroundQuery = selector({
+  key: 'userBackgroundImg',
+  get: async({get}) => {
+      const background = get(backgroundAtom);
+      if(background.status === 'initialized') {
+          if (background.value !== null) {
+              return background.value;
+          } else {
+            const { data } = await getBackgroundImages('seoul');
+            const convertResult = {
+              ...data,
+              dayImageUrl: await convertImageToDataUrl(data.dayImageUrl),
+              nightImageUrl: await convertImageToDataUrl(data.nightImageUrl),
+            };
+            return convertResult;
+          }
+      }
+      return undefined;
+  }
+})
+```
+
+쉽게 한계를 알 수 있다. 사용자가 컴포넌트 어딘가에서 배경화면을 바꾸는 동작이 일어났을
+경우에 이 셀렉터 만으로는 대응이 불가능하다.
+
+비동기 요청을 selector 밖에서 한 후, 값을 직접 가공해 backgroundAtom에 넘겨줘야만 이 쿼리를 참조하고 잇는 유저 배경화면을
+보여주고 있는 컴포넌트가 제대로 동작한다. selector 바깥에서 값을 마련해 atom에 set해야 하는 로직이 외부에 필요한 것이다.
+
+비동기 쿼리를 제공하는 selector에 set을 쓴다는게 어불성설이기도 하고, 비동기 쿼리의 get 함수 안에서 
+atom을 set할 수 없다. 아무래도 recoil은 데이터 그래프의 형태로 작동하기 때문에, get 함수 내부에서 부수효과를
+발생시키는 것은 개발자들의 의도는 아닐 것이다.
+
+그렇다면, 아예 쿼리를 분리해서 backgroundAtom은 스토리지에서 값을 가져오기만 하고,
+userBackgroundQuery는 selectorFamily로 설정하고 컴포넌트의 지역 state와 연동해 준비가 되었을 때 값을 가져오게 하는 쿼리로
+활용하면 어떨까?
+
+```tsx
+const backgroundAtom = atom({
+    key: 'userBackgroundImgInfo',
+    default: {
+      status: 'idle',
+      value: null,
+    },
+    effects_UNSTABLE: [
+        chromeStorageEffect<BackgroundImg>('userBackgroundImgInfo'),
+    ],
+})
+
+const userBackgroundQuery = selectorFamily({
+  key: 'userBackgroundImg',
+  get: (campus:Campus | null) => async({get}) => {
+      if (campus === null) return undefined; // 최초로 참조되는 나오는 undefiend는 컴포넌트에서 방어를 해야한다
+      const { data } = await getBackgroundImages(campus);
+      const convertResult = {
+        ...data,
+        dayImageUrl: await convertImageToDataUrl(data.dayImageUrl),
+        nightImageUrl: await convertImageToDataUrl(data.nightImageUrl),
+      };
+      return convertResult;
+  }
+})
+```
+
+물론 이 경우에도, 셀렉터 밖에서 아톰과, 스토리지에 직접 저장해야 한다는 것은 변하지 않아 여전히 selector에서
+모든 로직을 처리할 수 없긴 하다.
+
+컴포넌트에서는 처음에 backgroundAtom의 값을 탐색하고 
+없으면 userBackgroundQuery의 값을 참조하게 하는 방식으로 작동해야 하는데,
+여전히 셀렉터 바깥의 로직이 꽤 복잡하다.
+
+그냥 케이스가 매우 복잡하기 때문에(...) 구현이 어려운 케이스라 사실 RQ든 Recoil이든 구현이 어렵고, RQ든 Recoil이든
+다 때려치고 명령형으로 패칭해서 단순하게 유지하는 것도 괜찮을지도 모른다는... 생각까지 들게 만든다.
+
+어쨌든 이 케이스에서 알 수 있는 건 다음과 같다.
+
+Recoil 비동기 쿼리는 Recoil의 철학이라고 할 수 있는, atom에서 derived된
+data graph의 형태로 작동한다는 것을 아주 잘 알 수 있다. atom, selector의 데이터 그래프 내부에서 부수효과는 
+못 일으키고, graph의 간선은 recoil에서 컴포넌트로, 혹은 컴포넌트에서 recoil로,
+직선으로만 움직인다. (만약에 selector의 get에서 atom을 업데이트할 수 있었다면 쉽게 해결이 되었을 수도 
+있었을 것이다.)
+
+이 말은 client의 상태값과 서버 동기화가 엮인 복잡한 케이스에 대응하기에는
+데이터 그래프 흐름만으로는 부족하다는 것이다. 부수효과를 발생시켜야 할 수도 있다.
+결국 Recoil은 **상태 관리** 라는 목적을 아예 때놓고는 생각할 수 없다.
+
+반면 RQ의 queryFn은 완결된 프로미스를 리턴만 하면 되는 함수로, 리턴값만 지키면 그 안에서 무슨 부수효과를 만들어도
+상관이 없으므로 구현에 꽤나 열려있는 구조를 가지고 있다는 것을 알 수 있다. 물론 여러 상태와 엮인
+복잡한 케이스를 대응하다 보면 queryFn은 금방 더러워질 것이지만,,, 대응은 된다.
+
+정리하면 **Recoil로 대응 안되는 복잡한 비동기 처리 케이스는 RQ로 대응할 수 있다.**
+
+더불어 RQ에서는 useQuery처럼 컴포넌트에 선언형으로 쿼리를 선언할 수 있는 방법과 더불어, 정 안될때는 쓰라고
+명령형으로 데이터를 패칭하되 RQ의 캐싱을 이용할 수 있게 하는 방법을 만들어놨다. 
+
+```tsx
+// 명령형 패칭
+queryClient.fetchQuery(key, () => fetcher());
+
+// 알아서 패칭해서 여기에 넣기
+queryClient.setQueryData(queryKey, updater);
+```
+
+### 은총알은 업따!!!!!!!!!!!
+
+내가 위 상황에서 Recoil과 RQ중 하나를 찝어서 해결하려 고민했던 것은, 
+**비동기 처리를 관리하는 도구로 어떤 하나만을 쓰겠다**
+라는 컨벤션을 정확히 정하고 따르고 싶은 나의 욕망일 수도 있겠다. 
+
+예전에 회사다닐때, 특정 케이스에 대응하는 방법으로 새로운 도구를 도입하고 싶어도
+앱의 복잡도를 상승시킬 여지가 있으므로 섵불리 기술 도입은 안 하는게 좋겠다는 말을 들은적이 있어서,
+
+그때는 일반적인+모든 케이스를 대처할 하나의 도구를 정해놓고, 최대한 그것만 사용하는 것이
+협업 관점에서나, 프로젝트의 복잡성을 줄이는 면에서 더 좋은게 아닐까 하는 생각을 했었다.
+
+(아 물론 도구가 많아질수록 늘어나는 번들 크기같은건 생각해봐야겠지만,,,)
+
+하지만 요새는 생각이 많이 바뀌었다. 은총알은 없기 때문이다.
+프로그래머는 변화에 대처하는 모든 방법을 미리 배울 수 없다.
+
+아예 이런 복잡한 케이스를 만났을 때, RQ든 뭐든 뜯어내고
+axios만 가지고 hook 하나 만들어서 조금 더 저레벨에서 대응하는게 더 명료한 방법이라고 팀원들을 설득할 수 있다면,
+혹은 다른 도구를 가지고 하는게 더 낫다고 설득할 수 있으면 그게 최선의 해결책일 수도 있는 것이다.
+
+후... 어쨌든 위에서 보인 예처럼 RQ로 어떻게든 대응해놓긴 했는데,
+나중에 리팩토링할 때 원점에서 다시 검토해봐야겠다. queryClient 써볼까나
 
 ## Suspense
 
-비동기 쿼리를 쓸 때 Suspense가 무조건 필요하다
+Recoil은 비동기 쿼리를 쓸 때 Suspense를 사용하는 것이 기본으로 설정되어 있다.
+
+
+
+### Suspense 사용 후기
+
+1. undefined의 가능성과 단언
+
+2. 추상화 비용
+
+3. 자주 업데이트되야 하는 데이터의 경우?
+
 
 
 ## Refetch & Invalidation
