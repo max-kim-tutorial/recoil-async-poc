@@ -8,6 +8,8 @@ export const getTweetById = (id:string) => {
     return axios.get(`${process.env.REACT_APP_BASE_URL_2}/tweet/${id}`);
 }
 
-export const postFeedback = () => {
-    return axios.post(`${process.env.REACT_APP_BASE_URL}/feedback`);
+export const postFeedback = (feedback:string) => {
+    return axios.post(`${process.env.REACT_APP_BASE_URL}/feedback`, {
+        feedback
+    });
 }

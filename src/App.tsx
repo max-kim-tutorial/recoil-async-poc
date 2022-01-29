@@ -4,6 +4,8 @@ import CompB from "./CompB";
 import CompC from "./CompC";
 import CompD from "./CompD";
 import CompE from "./CompE";
+import CompF from "./CompF";
+import CompG from "./CompG";
 
 function App() {
     const [isShow, setIsShow] = useState(false);
@@ -23,6 +25,8 @@ function App() {
         <Suspense fallback={<h1>컴넌 E 로딩</h1>}>
             <CompE/>
         </Suspense>
+        <CompF/>
+        <CompG/>
         <Suspense fallback={<h1>컴넌 C 로딩</h1>}>
             {isShow ? <CompC/> : null}
         </Suspense>

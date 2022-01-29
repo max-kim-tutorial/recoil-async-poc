@@ -22,15 +22,8 @@ Recoil과 RQ는 집중하는 분야가 다르구나 싶은 생각이 들었었�
 - Recoil은 동기와 비동기 함수들을 selector의 데이터 플로우 그래프에서 균일하게 혼합해준다.
 - Selecter Get 콜백에서 나온 값 그 자체 대신 프로미스를 리턴해도 인터페이스는 정확하게 그대로 유지된다.
   - atom이나 selector은 promise 값을 처리하는데 무리가 없다. 심지어 atom에다가 promise를 써도 된다.
-  ```tsx
-  
-  ```
 - 이들은 selector일 뿐이므로 다른 selector에 의존하여 데이터를 추가로 변환할 수 있다(컨디셔널 쿼리)
 - Selector는 idempotent 함수로, 주어진 인풋들로 **항상 같은 결과**를 만들어낸다(캐싱)
-
-## GET Cache
-
-
 
 ## 컴포넌트 2곳에서 동시에 GET 비동기 쿼리 Mount
 
@@ -369,7 +362,8 @@ Recoil은 초기 렌더링때의 네트워크 요청 말고도
 Suspense의 선언형 취지에는 반한다고 할 수 있다.
 
 RQ에 경우 Suspense랑 안맞는 경우가 또 있는데, 바로 type이다. useQuery의 반환값 중 하나인 data는 `T | undefined`로 추론된다. 
-아 물론 쿼리가 실패할 수 있으니 쿼리 단에서는 맞는 얘기긴 한데,,, 
+아 물론 쿼리가 실패할 수 있으니 쿼리 단에서는 맞는 얘기긴 한데,,, 근데 suspense:true 설정하면
+이 쿼리가 suspense를 쓸건지 말건지를 미리 알수 있으니까 타입선언에 반영할 수 있지 않을까?? 하는 생각이..(아닌가)
 
 Suspense는 data가 undefined일 경우에는 렌더링을 멈춘다는게 핵심 컨셉인데, 그렇다면 Suspense를 사용하는 컴포넌트의
 로직은 data가 undefined일리가 없다고 전제하고 작성되어야 한다. undefined일 경우에는 fallback UI가 나타나니 필요가 없다는 것임
@@ -534,28 +528,239 @@ export default CompA
 
 ## POST, PUT 요청의 애매함
 
-body값 어캐넣음?
+GET은 그렇다 치는데,, 서버로 직접 요청을 보내야 할땐 Recoil을 어떻게 이용할 수 있을까?
+
+RQ는 Mutation이라는 좋은 해결책을 제시한다. mutate발생은 명령형으로 처리해야하기 때문에
+useMutation 훅을 이용해 mutate 함수를 얻어 그거가지고 post나 Put 요청을 날릴 수 있다.
+
+```tsx
+import React from 'react';
+import {useMutation} from "react-query";
+import {postFeedback} from "./atoms/service";
+
+function CompF() {
+    const {mutate, isLoading, isSuccess} = useMutation((feedback:string) => postFeedback(feedback))
+
+    const submitFeedback = () => {
+        mutate('이것은 피드백');
+    }
+
+    return (
+        <>
+            <h1>컴포넌트 F</h1>
+            <button onClick={submitFeedback}>피드백 보내기</button>
+            {isLoading && <div>피드백 보내는 중</div>}
+            {isSuccess && <div>피드백 보내기 성공</div>}
+        </>
+    )
+}
+
+export default CompF
+```
+
+Recoil은 post body가 들어갈 atom을 하나 만들어두고, atom 값이 변할때마다 
+POST 요청을 보내주는 selector을 만들어 처리할 수 있을 것 같다. 
+
+```tsx
+export const feedbackBody = atom({
+    key: 'feedbackBody',
+    default: {content: ''},
+})
+
+export const postFeedbackQuery = selector({
+    key: 'feedbackQuery',
+    get: async ({get}) => {
+        const feedback = get(feedbackBody);
+        if (feedback.content !== '') {
+            await postFeedback(feedback.content);
+        }
+        return
+    }
+})
+```
+
+아니면 atom 없이 selectorFamily를 사용하고 인자를 컴포넌트의 state값과 연동시켜
+컴포넌트의 state값이 변경되면 POST를 보내는 방식으로도 할 수 있다. 이 방식이 조금더 나아보인다.
+
+굳이 atom을 써서 post의 body를 atom에 가지고 있을 필요가 없다.
+
+```tsx
+export const postFeedbackQueryFamily = selectorFamily({
+    key: 'feedbackQuery',
+    get: (feedback:string|null) => async() => {
+        if (feedback !== null) {
+            await postFeedback(feedback);
+        }
+        return
+    }
+})
+```
+
+로딩, 에러 처리는 loadable을 쓰면 댄다
+
+엌..그런데,,
+Recoil은 atom, family의 인자가 계속 똑같으면 캐싱을 하고 비동기 쿼리를 실행하지 않는다!!!!!
+그래서 만약에 의존성으로 들어가는 값이 이전과 똑같은 값일 경우 POST 요청을 보내지 않는다..
+
+그래서 보낼때마다 리프레시를 해줘야한다. 완성된 결과물은 이렇다..
+
+```tsx
+const feedbackArr = ['피드백1', '피드백2'];
+
+function CompG() {
+  const [body, setBody] = useState('');
+  const feedbackLoadable = useRecoilValueLoadable(postFeedbackQueryFamily(body));
+
+  const refresh = useRecoilRefresher_UNSTABLE(postFeedbackQueryFamily(body));
+
+  const submitFeedback = () => {
+    const randomIndex = Math.floor(Math.random() * feedbackArr.length);
+    setBody(feedbackArr[randomIndex]);
+    refresh();
+  }
+
+  return (
+    <>
+      <h1>컴포넌트 G</h1>
+      <button onClick={submitFeedback}>피드백 보내기</button>
+      {feedbackLoadable.state === 'loading' && <div>피드백 보내는 중</div>}
+      {body !== '' && feedbackLoadable.state === 'hasValue' && <div>피드백 보내기 성공</div>}
+    </>
+  )
+}
+```
+
+원래는 피드백이 2번 보내진 후 피드백을 보낼 수 없었지만 계속 보낼 수 있게 되었다.
+
+혹시 의존하는 값이 불변값이라서 그런가 싶어서 로직을 가변값(객체)로 바꿔보았다. 
+그런데 selectorFamily 인자로 받았을 때는 안되었다.
+
+```tsx
+export const postFeedbackQueryFamily = selectorFamily({
+  key: 'feedbackQuery2',
+  get: (feedback:{content:string}) => async() => {
+    if (feedback.content !== '') {
+      await postFeedback(feedback.content);
+    }
+    return
+  }
+})
+
+const feedbackArr = ['피드백1', '피드백2'];
+
+function CompG() {
+    const [body, setBody] = useState({content:''});
+    const feedbackLoadable = useRecoilValueLoadable(postFeedbackQueryFamily(body));
+
+    // const refresh = useRecoilRefresher_UNSTABLE(postFeedbackQueryFamily(body));
+
+    const submitFeedback = () => {
+        const randomIndex = Math.floor(Math.random() * feedbackArr.length);
+        console.log(randomIndex);
+        setBody({content:feedbackArr[randomIndex]});
+        // refresh();
+    }
+
+    return (
+        <>
+            <h1>컴포넌트 G</h1>
+            <button onClick={submitFeedback}>피드백 보내기</button>
+            {feedbackLoadable.state === 'loading' && <div>피드백 보내는 중</div>}
+            {body.content !== '' && feedbackLoadable.state === 'hasValue' && <div>피드백 보내기 성공</div>}
+        </>
+    )
+}
+
+export default CompG
+```
+
+엥 뭐지 싶어서 atom으로 바꿔보았는데 이건 또 잘 작동했다.
+
+```tsx
+export const feedbackBody = atom({
+  key: 'feedbackBody',
+  default: {content: ''},
+})
+
+export const postFeedbackQuery = selector({
+  key: 'feedbackQuery',
+  get: async ({get}) => {
+    const feedback = get(feedbackBody);
+    if (feedback.content !== '') {
+      await postFeedback(feedback.content);
+    }
+    return
+  }
+})
+
+function CompG() {
+    const feedbackLoadable = useRecoilValueLoadable(postFeedbackQuery);
+    const [body, setBody] = useRecoilState(feedbackBody);
+    // const refresh = useRecoilRefresher_UNSTABLE(postFeedbackQuery);
+
+    const submitFeedback = () => {
+        const randomIndex = Math.floor(Math.random() * feedbackArr.length);
+        setBody({content: feedbackArr[randomIndex]});
+        // refresh();
+    }
+
+    return (
+        <>
+            <h1>컴포넌트 G</h1>
+            <button onClick={submitFeedback}>피드백 보내기</button>
+            {feedbackLoadable.state === 'loading' && <div>피드백 보내는 중</div>}
+            {body.content !== '' && feedbackLoadable.state === 'hasValue' && <div>피드백 보내기 성공</div>}
+        </>
+    )
+}
+```
+
+selectorFamily의 인자는 캐싱을 값으로 하고, atom은 레퍼런스로 하는건가? ㄷㄷ
+
+어쨌든,, POST, PUT 요청에 쓰기에는 힘들다는 것을 알 수 있다.
+사실 데이터 그래프 형태의 전역 상태 관리를 하려고 만들어진 친구라서, 
+서버의 데이터를 동기화하는 것 말고는, 애초에 서버의 상태를 쉽게 바꿀 수 있도록 만들어놓지 않았다.
+이건 걍 mutation이 압승..
+
+### Cache key
+
+
 
 ## 느낀점
 
 ### RQ가 Recoil보다 좋은 점
 
-- 좀더 복잡한 유스케이스의 비동기 처리에 강점
-  - staleTime, cacheTime
+- 좀더 복잡한 유스케이스(특히 시간과 관련된)의 비동기 처리에 강점
+  - staleTime, cacheTime 설정
   - 에러시 Retry, window refocus시 refetch
-  - refetchInterval
-- Mutation
-- 
+  - refetchInterval등 일정한 간격으로 패칭
+  - queryFn의 유연성
+  - queryClient의 API를 입맛대로 사용 가능
+- Mutation : Recoil로 POST, PUT하기 빡셈
+- **Recoil 데브툴 지금 마땅한게 없음**
 
 ### Recoil이 RQ보다 좋은 점
 
-- suspense와의 궁합
+- 단순한 GET 요청이고 한번 패칭해온 후 값이 자주 바뀌지 않는다면(staleTime:Infinity), useQuery보다 간단하고 신경쓸게 적은 방식으로 코딩 가능
+  - refresh api가 없었을 때는 staleTime: Infinity인거 빼고 리프레시가 빡세서 아예 안쓰는게 나았을 것 같긴함
+  - 근데 staleTime:Infinity였던 비동기 쿼리가 갑자기 케이스가 복잡해진다면..? 결국 recoil에서 뜯어낼 수 밖에 없다.
+  - 대응 가능한 케이스가 적어서 변화에 유연하지 못할듯 싶다.
+- suspense와의 궁합이 RQ보다 좋음
 
 ### 기타 등등
 
-- 앱의 복잡성 증대에는 어떤 영향을 끼칠까?
-- 비동기 쿼리 역시 Recoil Value를 기준으로 움직인다. 이런 면에서는 RTK Query 같기두 하고
+- Recoil의 캐시에 영향을 끼치는 의존성은 명시적으로 드러나있지가 않아서 실수하기 쉬울 것 같다. selector 내부의 get함수, selectorFamily의 인자 등을 유심히 살펴야 하지만 의존성 
+  배열이나 RQ의 동적 queryKey처럼 정리되어 한눈에 보기 쉬운 부분이 없고 selector의 get 함수 내부를 봐야 어떤게 의존성을 가지는지 알 수 있다. useEffect 의존성 배열처럼 
+  바꾸면 좋지 않을까? 싶기도
+- Recoil Atom, Selector을 만들기가 넘 쉬워서(미니멀한 API라) 금세 앱의 복잡성을 키워버릴 수 있을 듯 하다.
+- Recoil 비동기 쿼리 역시 Recoil의 상태 관리 시스템을 기본으로 한다. 이런 면에서는 RTK Query 같기두 하고
 
 ### 결론
 
+그래도 refresh가 나와서... 아주 단순하고, 잘 바뀌지 않는 요청에는 Recoil을 섞어서 쓰는게 더 명료하고 간편한 로직을 만들 수도 있다.
+하지만 RQ가 더 많은 케이스에 대응할 수 있고, POST나 PUT과 같은 서버의 상태를 변경시키는 요청도 RQ에서 폭넓게 처리 가능하다. 
 
+그래서 걍 왠만한 비동기 케이스에는 RQ나 SWR 쓰는게 낫지 않나.. 하는 생각
+
+Recoil은 그래도 전역 상태 관리에 아주 컴팩트하고 미니멀한 API를 제공하고 있고, effect같은 좋은 기능도 잘 나오고 있으니
+1.0.0 되기까지 더 발전하리라 본다. 근데 쓸만한 데브툴이 빨리 나왔으면 좋겠다ㅜㅜ 회사가면 사이드 프로젝트로 한번 만들어볼까..

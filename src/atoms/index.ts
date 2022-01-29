@@ -1,11 +1,6 @@
-import {selector, selectorFamily} from "recoil";
-import {getNotifications, getTweetById} from "./service";
+import {selector, selectorFamily, atom} from "recoil";
+import {getNotifications, getTweetById, postFeedback} from "./service";
 import {Notification, Tweet} from "./types";
-
-// const notificationsQuery = atom({
-//     key: 'notifications',
-//     default: null
-// })
 
 export const notificationsQuery = selector<Notification[]>({
     key: 'notifications',
@@ -20,5 +15,32 @@ export const tweetQuery = selectorFamily<Tweet, string>({
     get: tweetId => async () => {
         const { data } = await getTweetById(tweetId);
         return data.tweet;
+    }
+})
+
+
+export const feedbackBody = atom({
+    key: 'feedbackBody',
+    default: {content: ''},
+})
+
+export const postFeedbackQuery = selector({
+    key: 'feedbackQuery',
+    get: async ({get}) => {
+        const feedback = get(feedbackBody);
+        if (feedback.content !== '') {
+            await postFeedback(feedback.content);
+        }
+        return
+    }
+})
+
+export const postFeedbackQueryFamily = selectorFamily({
+    key: 'feedbackQuery2',
+    get: (feedback:{content:string}) => async() => {
+        if (feedback.content !== '') {
+            await postFeedback(feedback.content);
+        }
+        return
     }
 })
