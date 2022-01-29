@@ -327,35 +327,84 @@ axios만 가지고 hook 하나 만들어서 조금 더 저레벨에서 대응하
 후... 어쨌든 위에서 보인 예처럼 RQ로 어떻게든 대응해놓긴 했는데,
 나중에 리팩토링할 때 원점에서 다시 검토해봐야겠다. queryClient 써볼까나
 
-## Suspense
+## Suspense와의 궁합
 
 Recoil은 비동기 쿼리를 쓸 때 Suspense를 사용하는 것이 기본으로 설정되어 있다.
 
+RQ와 Recoil의 Suspense 동작에서의 차이는
+Recoil은 초기 렌더링때의 네트워크 요청 말고도
+리패칭이 일어나면 무조건 fallback UI가 보여지지만, RQ의 경우는 아니라는 것이다.
 
+```tsx
+ const { data:notifications, refetch, isFetching } = useQuery<Notification[], AxiosError>({
+        queryKey: 'notifications',
+        queryFn: async() => {
+            const {data} = await getNotifications();
+            return data.notifications
+        },
+        suspense: true,
+        staleTime: Infinity,
+        cacheTime: Infinity,
+    })
 
-### Suspense 사용 후기
+    return (
+        <>
+            {isFetching ? (<h1>컴넌 E 로딩</h1>) : ( // isFetching을 이용해야만 리패치시 로딩 UI 대응 가능
+                <>
+                    <h1>컴포넌트 E</h1>
+                    <button onClick={() => {refetch()}}>React Query 리패치</button>
+                    <div>{(notifications as Notification[])[4].title}</div>
+                    {/* useQuery의 data 값은 undeifined의 유니언 타입으로 추론되므로, 단언이 필요하다. */}
+                </>
+            )}
+        </>
+    )
+```
 
-1. undefined의 가능성과 단언
+뇌피셜인데, RQ는 stale-while-validate 구현체이기 때문에 stale이후 리패칭이 일어날 때 원래 cache된 데이터를 화면에 보여줘야 한다.
+이 방식을 따르기 때문에 query의 리턴값 중 하나인 isFetching을 플래그 삼아 로딩 UI를 보여주는 식으로 따로 처리해주지 않으면
+리패치시 Suspense의 fallback UI가 보이지는 않는다. RQ Suspense 조합으로 처음 써보았을 때 가장 읭?스러운 부분이라고 할 수 있다.
 
-2. 추상화 비용
+그런데 비동기 요청에 따른 명령형 로직을 작성하지 않으려고 Suspense를 쓰는건데... isFetching을 사용하는 것은
+Suspense의 선언형 취지에는 반한다고 할 수 있다.
 
-3. 자주 업데이트되야 하는 데이터의 경우?
+RQ에 경우 Suspense랑 안맞는 경우가 또 있는데, 바로 type이다. useQuery의 반환값 중 하나인 data는 `T | undefined`로 추론된다. 
+아 물론 쿼리가 실패할 수 있으니 쿼리 단에서는 맞는 얘기긴 한데,,, 
 
+Suspense는 data가 undefined일 경우에는 렌더링을 멈춘다는게 핵심 컨셉인데, 그렇다면 Suspense를 사용하는 컴포넌트의
+로직은 data가 undefined일리가 없다고 전제하고 작성되어야 한다. undefined일 경우에는 fallback UI가 나타나니 필요가 없다는 것임
 
+그런데 저렇게 추론되니까 단언을 해줘야한다. 아니면 `if(data===undefined)return null` 이런식으로 UI를 방어하는
+로직을 작성해야 하는데 이렇게되면 컴포넌트에 여러 훅을 사용해야할 경우 훅의 규칙을 위반할 수 있는 실행문이라 
+무지성으로 넣기에는 물의를 일으킬 수 있다.
 
-## Refetch & Invalidation
+Recoil은 undefined의 유니언 타입으로 추론되지 않는다. 쿼리 안에서의 에러 처리는 쿼리 내부에서 throw를 해주면 된단다
+독스의 예제인데, 이런 식이라면 리코일 비동기 쿼리의 리턴값은 확실히 쿼리의 결과물 뿐일 것이다.
 
-Selector의 의존성을 이용해 값을 캐싱하기 때문에 사실상 리코일에서의 Refetch와 Invalidation은 같은 개념이다.
+```tsx
+const currentUserNameQuery = selector({
+  key: 'CurrentUserName',
+  get: async ({get}) => {
+    const response = await myDBQuery({
+      userID: get(currentUserIDState),
+    });
+    if (response.error) {
+      throw response.error;
+    }
+    return response.name;
+  },
+});
+```
+
+여기서 발생시킨 에러는 ErrorBoundary에서 처리해주면 될것이고...
+
+여러모로 Recoil이 더 Suspense와 궁합이 더 잘 맞긴 하다. 역시 소속사가 똑같아서 그런가...
+staleTime이 Infinity인 쿼리는 Recoil로 대응하는게 더 타이핑 적고 깔끔할거같기도??
+
+## Invalidation
 
 RQ는 쿼리 자체를 Invalidation해서 캐시를 폐기하는 방법,
 useQuery의 리턴값 중 하나인 refetch를 이용해 값을 직접 imperative하게 데이터를 리패치 시도하는 방법 2가지의 방법이 있다. 
-
-RQ에서의 Invalidation과 refetch의 차이는, Invalidation 시킬 경우 쿼리 자체가 강제로 stale 상태로 바뀌고
-inactive 상태가 아닌 쿼리의 경우 리패치가 일어난다. 이때 cacheTime이나 stateTime을 얼마나 걸어놨는지는 상관이 없다.
-
-refetch 시도의 경우는 현재 설정한 stale, cache 타임에 영향을 받는다
-여전히 fresh 상태면 네트워크 요청이 발생하지 않을 것이고, stale 상태일때만 리패치가 일어나서
-결과값을 받아 캐시를 갱신한다.
 
 Recoil의 invalidation 방식은 의존성을 수정하는 것이다. 의존성은 SelectorFamily의 인자일수도,
 Selector 내부에서 의존하는 atom일수도 있다. 어쨌든 refetch를 위해서는 의존성이 필요하다.

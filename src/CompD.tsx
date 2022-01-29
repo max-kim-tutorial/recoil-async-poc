@@ -21,7 +21,7 @@ function CompD() {
     return (
         <>
             <h1>컴포넌트 D</h1>
-            <button onClick={() => {refresh()}}>트윗 쿼리 리프레시</button>
+            <button onClick={() => {refresh()}}>Recoil 쿼리 리프레시</button>
             <div>{tweet.name}</div>
             <div>{tweet.id}</div>
         </>
