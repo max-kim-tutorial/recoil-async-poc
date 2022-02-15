@@ -354,22 +354,23 @@ Recoil은 초기 렌더링때의 네트워크 요청 말고도
     )
 ```
 
-뇌피셜인데, RQ는 stale-while-validate 구현체이기 때문에 stale이후 리패칭이 일어날 때 원래 cache된 데이터를 화면에 보여줘야 한다.
-이 방식을 따르기 때문에 query의 리턴값 중 하나인 isFetching을 플래그 삼아 로딩 UI를 보여주는 식으로 따로 처리해주지 않으면
-리패치시 Suspense의 fallback UI가 보이지는 않는다. RQ Suspense 조합으로 처음 써보았을 때 가장 읭?스러운 부분이라고 할 수 있다.
+RQ Suspense 조합으로 처음 써보았을 때 가장 읭?스러운 부분이라고 할 수 있다. 
 
-그런데 비동기 요청에 따른 명령형 로직을 작성하지 않으려고 Suspense를 쓰는건데... isFetching을 사용하는 것은
-Suspense의 선언형 취지에는 반한다고 할 수 있다.
+처음에는 stale-while-validate 구현체이기 때문에 stale이후 리패칭이 일어날 때 원래 cache된 데이터를 보여는 방식을 따르기 때문에 query의 리턴값 중 하나인 isFetching을 플래그 삼아 로딩 UI를 보여주는 식으로 따로 처리해주지 않으면 리패치시 Suspense의 fallback UI가 보이지는 않는다. - 고 이해했었는데
 
-RQ에 경우 Suspense랑 안맞는 경우가 또 있는데, 바로 type이다. useQuery의 반환값 중 하나인 data는 `T | undefined`로 추론된다. 
-아 물론 쿼리가 실패할 수 있으니 쿼리 단에서는 맞는 얘기긴 한데,,, 근데 suspense:true 설정하면
-이 쿼리가 suspense를 쓸건지 말건지를 미리 알수 있으니까 타입선언에 반영할 수 있지 않을까?? 하는 생각이..(아닌가)
+[사실 아직 Suspense를 완벽하게 지원하지 않는다는게 맞는거](https://github.com/tannerlinsley/react-query/issues/1059) 같다.
+뭐 리패치가 필요없다면 상관없겠지만, 그래도 Suspense의 의도와 맞게 동작하지는 않는다.
 
-Suspense는 data가 undefined일 경우에는 렌더링을 멈춘다는게 핵심 컨셉인데, 그렇다면 Suspense를 사용하는 컴포넌트의
-로직은 data가 undefined일리가 없다고 전제하고 작성되어야 한다. undefined일 경우에는 fallback UI가 나타나니 필요가 없다는 것임
+RQ의 경우 Suspense랑 안맞는 경우가 또 있는데, 바로 type이다. useQuery의 반환값 중 하나인 data는 `T | undefined`로 추론된다. 
+[근데 이거는 useQuery의 enabled설정이 false일 경우, data의 값이 정말로 undefined로 나올 수 있는 가능성이 있기 때문에](https://github.com/tannerlinsley/react-query/issues/1297) RQ입장에서는 맞는 타입 표현이다.
 
-그런데 저렇게 추론되니까 단언을 해줘야한다. 아니면 `if(data===undefined)return null` 이런식으로 UI를 방어하는
-로직을 작성해야 하는데 이렇게되면 컴포넌트에 여러 훅을 사용해야할 경우 훅의 규칙을 위반할 수 있는 실행문이라 
+Suspense는 패칭하는 data가 undefined일 경우에는 렌더링을 멈춘다는게 핵심 컨셉인데, 그렇다면 Suspense를 사용하는 컴포넌트의
+로직은 data가 undefined일리가 없다고 전제하고 작성되어야 한다. undefined일 경우에는 fallback UI가 나타나니 필요가 없다는 것인데
+이러한 전제가 RQ의 타입 선언과 충돌하는 부분이 생긴 것이다. 
+
+suspense와 RQ를 같이 사용할때는 어쨌든 data가 undefined일 수 잇는데, enable을 쓰지 않는다면 타입 단언이 필요하다.
+아니면 `if(data===undefined)return null` 이런식으로 undefined를 방어하는 로직을 작성해야 하는데
+이렇게되면 컴포넌트에 여러 훅을 사용해야할 경우 훅의 규칙을 위반할 수 있는 실행문이라 
 무지성으로 넣기에는 물의를 일으킬 수 있다.
 
 Recoil은 undefined의 유니언 타입으로 추론되지 않는다. 쿼리 안에서의 에러 처리는 쿼리 내부에서 throw를 해주면 된단다
